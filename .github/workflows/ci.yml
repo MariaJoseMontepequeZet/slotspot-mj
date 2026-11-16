@@ -52,5 +52,23 @@ jobs:
       - name: Ejecutar las pruebas de la API
         run: pytest
 
+      - name: Verificar la sintaxis de los scripts
+        run: |
+          for script in db/probar.sh ops/respaldar.sh ops/restaurar.sh ops/tests/probar_respaldos.sh; do
+            bash -n "$script"
+          done
+
       - name: Probar el esquema de la base de datos
         run: bash db/probar.sh
+
+      - name: Probar el respaldo y la restauracion
+        run: bash ops/tests/probar_respaldos.sh
+
+      - name: Validar el compose de referencia
+        env:
+          POSTGRES_DB: slotspot
+          POSTGRES_USER: slotspot
+          POSTGRES_PASSWORD: prueba
+          JWT_SECRET: prueba
+          ALLOWED_ORIGINS: http://127.0.0.1:8439
+        run: docker compose -f ops/docker-compose.yml config --quiet
