@@ -52,5 +52,40 @@ jobs:
       - name: Ejecutar las pruebas de la API
         run: pytest
 
+      - name: Verificar la sintaxis de los scripts
+        run: |
+          for script in db/probar.sh ops/respaldar.sh ops/restaurar.sh ops/tests/probar_respaldos.sh; do
+            bash -n "$script"
+          done
+
       - name: Probar el esquema de la base de datos
         run: bash db/probar.sh
+
+      - name: Probar el respaldo y la restauracion con Docker
+        env:
+          PROBAR_DOCKER_REAL: "1"
+          DB_CONTENEDOR: slotspot-db
+        run: |
+          docker run -d --name slotspot-db \
+            -e POSTGRES_DB=slotspot -e POSTGRES_USER=slotspot -e POSTGRES_PASSWORD=prueba \
+            postgres:16-alpine
+          timeout 90 bash -c 'until [ "$(docker logs slotspot-db 2>&1 | grep -c "init process complete")" -ge 1 ]; do sleep 1; done'
+          timeout 60 bash -c 'until docker exec slotspot-db pg_isready -U slotspot -d slotspot; do sleep 1; done'
+          if ! bash ops/tests/probar_respaldos.sh > "$RUNNER_TEMP/respaldos.txt" 2>&1; then
+            cat "$RUNNER_TEMP/respaldos.txt"
+            resumen="$(tail -n 12 "$RUNNER_TEMP/respaldos.txt" | tr '\n' ' ' | cut -c1-900)"
+            echo "::error title=Fallo la prueba de respaldos::${resumen}"
+            docker rm -f slotspot-db > /dev/null
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/respaldos.txt"
+          docker rm -f slotspot-db > /dev/null
+
+      - name: Validar el compose de referencia
+        env:
+          POSTGRES_DB: slotspot
+          POSTGRES_USER: slotspot
+          POSTGRES_PASSWORD: prueba
+          JWT_SECRET: prueba
+          ALLOWED_ORIGINS: http://127.0.0.1:8439
+        run: docker compose -f ops/docker-compose.yml config --quiet
