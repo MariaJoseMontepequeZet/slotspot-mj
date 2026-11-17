@@ -68,9 +68,12 @@ La API queda en `http://127.0.0.1:8000`. La documentacion interactiva de FastAPI
 | `ruff check .` | Revisa el codigo |
 | `ruff format --check .` | Verifica el formato |
 | `bash db/probar.sh` | Prueba el esquema de la base de datos (requiere `psql` y un servidor PostgreSQL) |
-| `bash ops/tests/probar_respaldos.sh` | Prueba el respaldo y la restauracion (requiere `psql`, `pg_dump` y `gzip`) |
+| `bash ops/tests/probar_respaldos.sh` | Prueba el respaldo y la restauracion con un `docker` simulado (requiere `psql`, `pg_dump` y `gzip`) |
+| `PROBAR_DOCKER_REAL=1 bash ops/tests/probar_respaldos.sh` | La misma prueba contra un contenedor `slotspot-db` real |
 
 El workflow `.github/workflows/ci.yml` ejecuta todos, ademas de revisar la sintaxis de los scripts y validar el compose de referencia, en cada pull request hacia `dev` o `main`, contra un PostgreSQL 16 real. Corre en los servidores de GitHub, no en el servidor propio.
+
+En el CI la prueba de respaldos usa un contenedor real `postgres:16-alpine` y `docker exec`, igual que en produccion. Asi `pg_dump` y `psql` son de la misma version que el servidor. Usar los clientes del runner no sirve: un `pg_dump` 17 o 18 escribe `SET transaction_timeout`, un parametro que PostgreSQL 16 no conoce, y la restauracion falla.
 
 ## Base de datos
 

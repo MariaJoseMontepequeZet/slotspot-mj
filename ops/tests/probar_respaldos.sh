@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Modo simulado (por defecto): usa un docker falso que ejecuta los comandos contra el
+# PostgreSQL de las variables PG*. Modo real (PROBAR_DOCKER_REAL=1): usa el contenedor
+# DB_CONTENEDOR (por defecto slotspot-db), que debe existir y estar listo.
+
 raiz="$(cd "$(dirname "$0")/../.." && pwd)"
 tmp="$(mktemp -d)"
+real="${PROBAR_DOCKER_REAL:-}"
+contenedor="${DB_CONTENEDOR:-slotspot-db}"
 base="slotspot_respaldo_$$"
 
 limpiar() {
-    psql -q -d postgres -c "DROP DATABASE IF EXISTS ${base} WITH (FORCE)" > /dev/null 2>&1 || true
+    if [ -z "$real" ]; then
+        psql -q -d postgres -c "DROP DATABASE IF EXISTS ${base} WITH (FORCE)" > /dev/null 2>&1 || true
+    fi
     rm -rf "$tmp"
 }
 trap limpiar EXIT
@@ -23,7 +31,13 @@ esperar() {
     ok "$1"
 }
 
-sql() { psql -d "$base" -v ON_ERROR_STOP=1 -q -At -c "$1"; }
+if [ -n "$real" ]; then
+    sql() { docker exec -i "$contenedor" sh -c 'psql -v ON_ERROR_STOP=1 -q -At -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "$1"; }
+    aplicar() { docker exec -i "$contenedor" sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$1"; }
+else
+    sql() { psql -d "$base" -v ON_ERROR_STOP=1 -q -At -c "$1"; }
+    aplicar() { psql -v ON_ERROR_STOP=1 -q -d "$base" -f "$1"; }
+fi
 
 conteos() {
     sql "SELECT (SELECT count(*) FROM usuarios) || ',' || (SELECT count(*) FROM servicios) || ',' || (SELECT count(*) FROM pagos) || ',' || (SELECT count(*) FROM auditoria) || ',' || (SELECT count(*) FROM tipos_vehiculo) || ',' || (SELECT count(*) FROM slots)"
@@ -34,7 +48,13 @@ tarifa_auto() { sql "SELECT tarifa_hora FROM tipos_vehiculo WHERE codigo = 'AUT'
 archivos() { ls -1 "$tmp/resp" | wc -l | tr -d ' '; }
 
 mkdir -p "$tmp/bin" "$tmp/resp"
-cat > "$tmp/bin/docker" << SHIM
+export RESPALDOS_DIR="$tmp/resp"
+
+if [ -n "$real" ]; then
+    export DB_CONTENEDOR="$contenedor"
+    echo "Modo real: contenedor $contenedor"
+else
+    cat > "$tmp/bin/docker" << SHIM
 #!/usr/bin/env bash
 [ "\$1" = "exec" ] || { echo "docker simulado: solo admite exec" >&2; exit 1; }
 shift
@@ -50,12 +70,14 @@ fi
 shift 3
 POSTGRES_USER="\${PGUSER:-postgres}" POSTGRES_DB="$base" exec sh -c "\$1"
 SHIM
-chmod +x "$tmp/bin/docker"
-export PATH="$tmp/bin:$PATH"
-export RESPALDOS_DIR="$tmp/resp"
+    chmod +x "$tmp/bin/docker"
+    export PATH="$tmp/bin:$PATH"
+    psql -v ON_ERROR_STOP=1 -q -d postgres -c "CREATE DATABASE ${base}"
+    echo "Modo simulado: base $base"
+fi
 
-psql -v ON_ERROR_STOP=1 -q -d postgres -c "CREATE DATABASE ${base}"
-psql -v ON_ERROR_STOP=1 -q -d "$base" -f "$raiz/db/schema.sql" -f "$raiz/db/seed.sql"
+aplicar "$raiz/db/schema.sql"
+aplicar "$raiz/db/seed.sql"
 sql "INSERT INTO usuarios (nombre, email, password_hash, rol_id) SELECT 'Prueba', 'prueba@slotspotmj.com', 'hash', id FROM roles WHERE nombre = 'admin'"
 sql "INSERT INTO servicios (placa, tipo_id, slot_numero, estado, entrada, salida, registrado_por) SELECT 'P-111AAA', t.id, 1, 'finalizado', now() - interval '3 hours', now(), u.id FROM tipos_vehiculo t, usuarios u WHERE t.codigo = 'AUT'"
 sql "INSERT INTO pagos (servicio_id, horas, tarifa_hora, total, registrado_por) SELECT id, 3, 15.00, 45.00, registrado_por FROM servicios"
@@ -87,9 +109,13 @@ antes="$(archivos)"
 if DB_CONTENEDOR=inexistente bash "$raiz/ops/respaldar.sh" > /dev/null 2>&1; then fallar "un contenedor inexistente debe fallar"; fi
 esperar "respaldo fallido: no deja archivos nuevos ni temporales" "$antes" "$(archivos)"
 
-antes="$(archivos)"
-if SHIM_TRUNCAR=1 bash "$raiz/ops/respaldar.sh" > /dev/null 2>&1; then fallar "un respaldo incompleto debe descartarse"; fi
-esperar "respaldo incompleto: se descarta sin dejar archivos" "$antes" "$(archivos)"
+if [ -z "$real" ]; then
+    antes="$(archivos)"
+    if SHIM_TRUNCAR=1 bash "$raiz/ops/respaldar.sh" > /dev/null 2>&1; then fallar "un respaldo incompleto debe descartarse"; fi
+    esperar "respaldo incompleto: se descarta sin dejar archivos" "$antes" "$(archivos)"
+else
+    echo "OMITIDO respaldo incompleto: solo se simula en el modo simulado"
+fi
 
 sql "DROP SCHEMA public CASCADE; CREATE SCHEMA public"
 esperar "base vaciada" "0" "$(sql "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")"
