@@ -9,20 +9,85 @@ API del sistema de administracion de parqueadero SlotSpot MJ. El frontend vive e
 
 ## Estado actual
 
-Esta es la base del backend. Hoy expone un solo endpoint y sirve para validar el despliegue automatico. Los demas endpoints se agregan por etapas.
+La API ya tiene autenticacion: contrasenas cifradas con Argon2id, sesiones con tokens JWT y un formato de error uniforme. La aplicacion web todavia no la usa (se conecta en una etapa posterior).
 
-| Metodo | Ruta | Descripcion |
-|--------|------|-------------|
-| GET | `/salud` | Devuelve `{"estado": "ok"}`. Lo usa el healthcheck de Docker |
+| Metodo | Ruta | Acceso | Descripcion |
+|--------|------|--------|-------------|
+| GET | `/salud` | Publico | Devuelve `{"estado": "ok"}`. Lo usa el healthcheck de Docker |
+| GET | `/salud/bd` | Publico | Comprueba que la base de datos responde |
+| POST | `/auth/login` | Publico | Recibe `email` y `password` y devuelve un token de acceso |
+| GET | `/auth/yo` | Sesion | Devuelve el usuario de la sesion |
+| POST | `/usuarios` | Administrador | Crea un usuario con rol `admin` u `operador` |
+| GET | `/usuarios` | Administrador | Lista los usuarios, sin datos secretos |
 
-En el servidor, Caddy publica la API bajo `/api/*`, por lo que desde el navegador la ruta es `/api/salud`.
+En el servidor, Caddy publica la API bajo `/api/*` y quita ese prefijo, por lo que desde el navegador las rutas son `/api/salud`, `/api/auth/login`, etc.
+
+## Autenticacion
+
+- **Contrasenas:** se guardan cifradas con Argon2id (19 MiB, 2 pasadas, 1 hilo, los minimos que recomienda OWASP). Nunca se guardan ni se devuelven en claro. Un hash con parametros mas debiles se actualiza solo en el siguiente inicio de sesion correcto.
+- **Tokens:** JWT firmado con HS256 que lleva `sub`, `rol`, `iss`, `iat` y `exp`. Expira a los 60 minutos por defecto. Al verificarlo se exige el algoritmo, el emisor y las cuatro reclamaciones, de modo que un token con algoritmo `none`, otro emisor o una firma alterada se rechaza.
+- **Cada peticion consulta la base de datos:** el rol y el estado activo salen de la base de datos y no del token. Si se desactiva a un usuario o se le cambia el rol, el cambio rige de inmediato.
+- **Credenciales invalidas:** un correo inexistente, una contrasena incorrecta y un usuario inactivo dan exactamente la misma respuesta, y en los tres casos se hace el mismo trabajo de cifrado para que el tiempo de respuesta no delate si el correo existe.
+- **Memoria acotada:** cada calculo de Argon2id reserva unos 19 MiB, asi que solo se permiten 4 a la vez; el resto de las peticiones espera su turno. Sin ese limite, una rafaga de inicios de sesion podria agotar la memoria del contenedor.
+- **Sin registro abierto:** no hay ningun endpoint publico para crear cuentas. Los usuarios los crea un administrador, y el primero se crea con la linea de comandos.
+
+Ejemplo de inicio de sesion y uso del token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "correo@ejemplo.com", "password": "su_contrasena"}'
+
+curl http://127.0.0.1:8000/auth/yo -H "Authorization: Bearer EL_TOKEN"
+```
+
+### Formato de los errores
+
+Todos los errores tienen la misma forma, sea una validacion, un permiso o una falla interna:
+
+```json
+{"error": {"codigo": "credenciales_invalidas", "mensaje": "Correo o contrasena incorrectos.", "detalle": null}}
+```
+
+| Estado | Codigo | Cuando |
+|--------|--------|--------|
+| 401 | `no_autenticado` | Falta el token |
+| 401 | `credenciales_invalidas` | Correo o contrasena incorrectos |
+| 401 | `token_invalido` / `token_expirado` | Token manipulado, de otro emisor, vencido o de un usuario desactivado |
+| 403 | `prohibido` | Falta el rol de administrador |
+| 404 / 405 | `no_encontrado` / `metodo_no_permitido` | Ruta o metodo inexistente |
+| 409 | `conflicto` | Ya existe un usuario con ese correo |
+| 422 | `validacion` | Datos invalidos; `detalle` lista cada campo con su mensaje |
+| 503 | `bd_no_disponible` | La base de datos no responde |
+| 500 | `error_interno` | Falla inesperada; el detalle solo se escribe en el log, nunca en la respuesta |
+
+### Crear el primer administrador
+
+Se hace desde la linea de comandos y la contrasena se pide sin mostrarla, asi no queda en el historial del terminal ni en ningun chat. En el servidor:
+
+```bash
+docker exec -it slotspot-api python -m app.cli crear-admin --nombre "Nombre Apellido" --email correo@ejemplo.com
+```
+
+Para automatizarlo existe `--password-stdin`, que lee la contrasena de la entrada estandar. La contrasena debe tener entre 8 y 128 caracteres.
 
 ## Estructura
 
 ```
 slotspot-mj/
 ├── app/
-│   └── main.py                 # Aplicacion FastAPI
+│   ├── main.py                 # Aplicacion FastAPI y sus rutas de salud
+│   ├── config.py               # Variables de entorno
+│   ├── db.py                   # Pool de conexiones a PostgreSQL
+│   ├── errores.py              # Errores de la aplicacion y manejadores
+│   ├── seguridad.py            # Argon2id y tokens JWT
+│   ├── esquemas.py             # Modelos de entrada y salida
+│   ├── repositorio.py          # Consultas SQL de usuarios
+│   ├── dependencias.py         # Sesion actual y control de rol
+│   ├── cli.py                  # Linea de comandos (crear-admin)
+│   └── routers/
+│       ├── auth.py             # /auth/login y /auth/yo
+│       └── usuarios.py         # /usuarios
 ├── db/
 │   ├── schema.sql              # Tablas, restricciones, indices y triggers
 │   ├── seed.sql                # Roles, tipos de vehiculo y 20 slots
@@ -38,7 +103,13 @@ slotspot-mj/
 ├── docs/
 │   └── diagrama-er.md          # Diagrama entidad-relacion
 ├── tests/
-│   └── test_salud.py           # Pruebas con pytest
+│   ├── conftest.py             # Base de datos temporal por prueba
+│   ├── test_seguridad.py       # Hash y tokens, sin base de datos
+│   ├── test_auth.py            # Inicio de sesion y sesion actual
+│   ├── test_usuarios.py        # Alta, validacion y lista de usuarios
+│   ├── test_errores.py         # Formato de errores, CORS y documentacion
+│   ├── test_cli.py             # Comando crear-admin
+│   └── test_salud.py           # Ruta de salud
 ├── .github/workflows/
 │   ├── ci.yml                  # Ruff, pytest, base de datos, respaldos y compose
 │   └── desplegar.yml           # Despliegue automatico al hacer push a main
@@ -58,13 +129,21 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
-La API queda en `http://127.0.0.1:8000`. La documentacion interactiva de FastAPI esta en `/docs`.
+Necesita estas variables de entorno (los nombres estan en `.env.example`):
+
+```bash
+export DATABASE_URL=postgresql://usuario:contrasena@localhost:5432/slotspot
+export JWT_SECRET=un_texto_aleatorio_de_al_menos_32_caracteres
+export API_DOCS=1
+```
+
+La API queda en `http://127.0.0.1:8000`. Con `API_DOCS=1` la documentacion interactiva de FastAPI esta en `/docs`; sin esa variable, que es lo normal en el servidor, `/docs` y `/openapi.json` no existen.
 
 ## Calidad del codigo
 
 | Comando | Descripcion |
 |---------|-------------|
-| `pytest` | Ejecuta las pruebas |
+| `pytest` | Ejecuta las pruebas. Las que usan PostgreSQL se omiten si no se define `TEST_DATABASE_ADMIN_URL` |
 | `ruff check .` | Revisa el codigo |
 | `ruff format --check .` | Verifica el formato |
 | `bash db/probar.sh` | Prueba el esquema de la base de datos (requiere `psql` y un servidor PostgreSQL) |
@@ -74,6 +153,15 @@ La API queda en `http://127.0.0.1:8000`. La documentacion interactiva de FastAPI
 El workflow `.github/workflows/ci.yml` ejecuta todos, ademas de revisar la sintaxis de los scripts y validar el compose de referencia, en cada pull request hacia `dev` o `main`, contra un PostgreSQL 16 real. Corre en los servidores de GitHub, no en el servidor propio.
 
 En el CI la prueba de respaldos usa un contenedor real `postgres:16-alpine` y `docker exec`, igual que en produccion. Asi `pg_dump` y `psql` son de la misma version que el servidor. Usar los clientes del runner no sirve: un `pg_dump` 17 o 18 escribe `SET transaction_timeout`, un parametro que PostgreSQL 16 no conoce, y la restauracion falla.
+
+### Pruebas con PostgreSQL
+
+Las pruebas de la API crean una base nueva por cada prueba a partir de una plantilla con el esquema, de modo que ninguna depende de otra. Necesitan un usuario que pueda crear bases de datos:
+
+```bash
+export TEST_DATABASE_ADMIN_URL=postgresql://postgres:contrasena@localhost:5432/postgres
+pytest
+```
 
 ## Base de datos
 
@@ -171,8 +259,10 @@ Los nombres estan en `.env.example`. Los valores reales viven en el archivo `.en
 | Variable | Uso |
 |----------|-----|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Credenciales de la base de datos |
-| `JWT_SECRET` | Firma de los tokens de sesion |
-| `ALLOWED_ORIGINS` | Origenes permitidos por CORS |
+| `JWT_SECRET` | Firma de los tokens de sesion (minimo 32 caracteres) |
+| `ALLOWED_ORIGINS` | Origenes permitidos por CORS, separados por comas |
+| `JWT_EXPIRA_MINUTOS` | Opcional. Duracion de la sesion, de 1 a 1440 (por defecto 60) |
+| `API_DOCS` | Opcional. Con valor `1` publica `/docs`; por defecto esta oculta |
 
 ## Despliegue
 

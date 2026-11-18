@@ -50,6 +50,8 @@ jobs:
         run: ruff format --check .
 
       - name: Ejecutar las pruebas de la API
+        env:
+          TEST_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest
 
       - name: Verificar la sintaxis de los scripts
