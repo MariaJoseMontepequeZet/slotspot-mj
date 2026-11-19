@@ -55,7 +55,8 @@ services:
     cpus: 0.5
     logging: *logging
     ports:
-      - "127.0.0.1:8439:80"
+      # Abierto en todas las interfaces: el conector de Cloudflare de otro proyecto entra por la direccion del servidor
+      - "8439:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./slotspot-mj-frontend/public:/srv:ro
