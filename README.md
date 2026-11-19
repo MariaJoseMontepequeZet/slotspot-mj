@@ -97,6 +97,7 @@ slotspot-mj/
 ├── ops/
 │   ├── respaldar.sh            # Respaldo diario de PostgreSQL con retencion
 │   ├── restaurar.sh            # Restauracion desde un respaldo, con confirmacion
+│   ├── Caddyfile               # Servidor web: rutas, politica de seguridad y permiso de incrustacion
 │   ├── docker-compose.yml      # Compose de referencia con limites y rotacion de logs
 │   └── tests/
 │       └── probar_respaldos.sh # Prueba de respaldo y restauracion
@@ -109,6 +110,7 @@ slotspot-mj/
 │   ├── test_usuarios.py        # Alta, validacion y lista de usuarios
 │   ├── test_errores.py         # Formato de errores, CORS y documentacion
 │   ├── test_cli.py             # Comando crear-admin
+│   ├── test_caddyfile.py       # Politica de seguridad y rutas del Caddyfile
 │   └── test_salud.py           # Ruta de salud
 ├── .github/workflows/
 │   ├── ci.yml                  # Ruff, pytest, base de datos, respaldos y compose
@@ -239,6 +241,42 @@ bash ~/slotspot/slotspot-mj/ops/restaurar.sh ~/slotspot/respaldos/slotspot_AAAAM
 ```
 
 Reemplaza **todos** los datos de la base por los del respaldo. Antes de tocar nada comprueba que el archivo sea un gzip valido y pide escribir `RESTAURAR`. La restauracion corre en una sola transaccion: si algo falla, la base queda como estaba.
+
+### Mostrar la demo en otro sitio (portafolio)
+
+Por defecto un navegador no deja que una pagina se muestre dentro de otra (`iframe`). `ops/Caddyfile` lo permite **solo para el portafolio**, con la directiva de la politica de seguridad:
+
+```
+frame-ancestors 'self' https://portafoliomariajosemontepequezet.pamcing.me
+```
+
+- Cualquier otro sitio que intente incrustar la aplicacion queda bloqueado; el navegador lo registra como `violates the following Content Security Policy directive: "frame-ancestors ..."`.
+- No se envia `X-Frame-Options`: esa cabecera no admite una lista de origenes y contradiria a `frame-ancestors`.
+- El resto de la politica no cambia: los scripts solo pueden venir del propio sitio.
+
+Para aplicarlo en el servidor, primero comparar con el Caddyfile actual y luego recargar `web`:
+
+```bash
+cd ~/slotspot
+cp Caddyfile Caddyfile.bak
+diff Caddyfile slotspot-mj/ops/Caddyfile
+cp slotspot-mj/ops/Caddyfile Caddyfile
+docker compose restart web
+```
+
+Reiniciar `web` es necesario porque el Caddyfile se monta como archivo unico. Para comprobarlo:
+
+```bash
+curl -sI https://slotspotmj.pamcing.me/ | grep -i content-security-policy
+```
+
+La salida debe contener `frame-ancestors 'self' https://portafoliomariajosemontepequezet.pamcing.me` y no debe aparecer `X-Frame-Options`.
+
+El portafolio, a su vez, debe permitir cargar la direccion en su propia politica (`frame-src https://slotspotmj.pamcing.me`), y el `iframe` debe apuntar a `https://slotspotmj.pamcing.me/?demo=1`, que entra solo a la demo (ver el repositorio del frontend).
+
+### Puerto del servicio web
+
+En el compose, `web` publica `8439:80` en todas las interfaces y no solo en `127.0.0.1`. Es a proposito: el conector de Cloudflare que atiende `slotspotmj.pamcing.me` corre dentro de otro contenedor y entra por la direccion del servidor, asi que un puerto limitado a `127.0.0.1` le daria error 502. Cerrarlo de nuevo exige antes darle a SlotSpot su propio conector dentro de este compose y apuntar el tunel a `http://web:80`.
 
 ### Limites de recursos y logs
 

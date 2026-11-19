@@ -1,0 +1,30 @@
+{
+    auto_https off
+}
+
+:80 {
+    root * /srv
+    encode gzip zstd
+
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    handle_path /api/* {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
+
+    header {
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://portafoliomariajosemontepequezet.pamcing.me; base-uri 'self'; form-action 'self'"
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Cache-Control "no-cache"
+        -Server
+    }
+}
