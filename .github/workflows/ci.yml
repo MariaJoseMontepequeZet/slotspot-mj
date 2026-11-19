@@ -83,6 +83,11 @@ jobs:
           cat "$RUNNER_TEMP/respaldos.txt"
           docker rm -f slotspot-db > /dev/null
 
+      - name: Validar el Caddyfile con Caddy
+        run: |
+          docker run --rm -v "$PWD/ops/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine \
+            caddy validate --config /etc/caddy/Caddyfile
+
       - name: Validar el compose de referencia
         env:
           POSTGRES_DB: slotspot
