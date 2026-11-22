@@ -275,11 +275,11 @@ La salida debe contener `frame-ancestors 'self' https://portafoliomariajosemonte
 
 El portafolio, a su vez, debe permitir cargar la direccion en su propia politica (`frame-src https://slotspotmj.pamcing.me`), y el `iframe` debe apuntar a `https://slotspotmj.pamcing.me/?demo=1`, que entra solo a la demo (ver el repositorio del frontend).
 
-### Puerto del servicio web
+### Puerto del servicio web y tunel propio
 
-En el compose, `web` publica `8439:80` en todas las interfaces y no solo en `127.0.0.1`. Es temporal: el conector de Cloudflare que atiende `slotspotmj.pamcing.me` corre dentro de otro contenedor y entra por la direccion del servidor, asi que un puerto limitado a `127.0.0.1` le daria error 502. Mientras siga asi, el puerto es alcanzable por HTTP desde la red del servidor.
+`web` publica el puerto solo en `127.0.0.1:8439`, asi que no es alcanzable desde la red. El trafico de internet entra por el servicio `tunel` de este compose (`cloudflared` con la version fijada), que llega a `web` por la red interna de Docker. SlotSpot no depende del conector de ningun otro proyecto.
 
-Para cerrarlo hay que hacer que el conector llegue a `web` por la red de Docker y no por el puerto publicado: o bien conectar el contenedor del conector a la red `slotspot_default` (`docker network connect slotspot_default <contenedor-del-conector>`) y cambiar en Cloudflare Zero Trust el servicio del hostname a `http://slotspot-web:80`, o bien correr un conector propio de SlotSpot dentro de este compose. Con eso funcionando se cambia el compose a `"127.0.0.1:8439:80"` (y la prueba de `tests/test_caddyfile.py` que hoy exige `8439:80`).
+Para activarlo hay que crear un tunel propio en Cloudflare Zero Trust (Networks > Tunnels > Create a tunnel > Cloudflared > Docker), copiar su token a `TUNEL_TOKEN` en el `.env` del servidor y apuntar el hostname `slotspotmj.pamcing.me` a `http://web:80`. El token nunca se sube al repositorio.
 
 ### Rol de base de datos de la API
 
@@ -328,6 +328,7 @@ Los nombres estan en `.env.example`. Los valores reales viven en el archivo `.en
 | Variable | Uso |
 |----------|-----|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Credenciales de la base de datos |
+| `TUNEL_TOKEN` | Token del tunel de Cloudflare propio de SlotSpot |
 | `APP_DB_PASSWORD` | Contrasena del rol `slotspot_app` con el que se conecta la API |
 | `IP_CLIENTE_CABECERA` | Opcional. Cabecera con la IP real del visitante (`CF-Connecting-IP`); vacia por defecto |
 | `JWT_SECRET` | Firma de los tokens de sesion (minimo 32 caracteres) |

@@ -83,10 +83,16 @@ class TestRutas:
 
 
 class TestCompose:
-    def test_el_puerto_web_es_alcanzable_por_el_conector_de_cloudflare(self):
+    def test_el_puerto_web_solo_escucha_en_el_propio_servidor(self):
         compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")
-        assert '- "8439:80"' in compose
-        assert "127.0.0.1:8439" not in compose
+        assert '- "127.0.0.1:8439:80"' in compose
+        assert '- "8439:80"' not in compose
+
+    def test_el_tunel_propio_llega_a_web_por_la_red_de_docker(self):
+        compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")
+        bloque = servicio(compose, "tunel")
+        assert "TUNNEL_TOKEN: ${TUNEL_TOKEN}" in bloque
+        assert "ports:" not in bloque
 
     def test_el_caddyfile_se_monta_desde_la_carpeta_del_proyecto(self):
         compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")

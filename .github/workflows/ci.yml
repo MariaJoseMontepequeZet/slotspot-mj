@@ -115,6 +115,8 @@ jobs:
           POSTGRES_DB: slotspot
           POSTGRES_USER: slotspot
           POSTGRES_PASSWORD: prueba
+          APP_DB_PASSWORD: prueba
+          TUNEL_TOKEN: prueba
           JWT_SECRET: prueba
           ALLOWED_ORIGINS: http://127.0.0.1:8439
         run: docker compose -f ops/docker-compose.yml config --quiet

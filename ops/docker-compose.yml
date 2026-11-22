@@ -65,8 +65,7 @@ services:
     cpus: 0.5
     logging: *logging
     ports:
-      # Abierto en todas las interfaces: el conector de Cloudflare de otro proyecto entra por la direccion del servidor
-      - "8439:80"
+      - "127.0.0.1:8439:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./slotspot-mj-frontend/public:/srv:ro
@@ -85,6 +84,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+
+  tunel:
+    image: cloudflare/cloudflared:2025.11.1
+    container_name: slotspot-tunel
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    logging: *logging
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNEL_TOKEN}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      web:
+        condition: service_healthy
 
 volumes:
   slotspot_db_data:
