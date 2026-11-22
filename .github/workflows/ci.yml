@@ -32,9 +32,9 @@ jobs:
       PGPASSWORD: postgres
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -56,7 +56,7 @@ jobs:
 
       - name: Verificar la sintaxis de los scripts
         run: |
-          for script in db/probar.sh ops/respaldar.sh ops/restaurar.sh ops/tests/probar_respaldos.sh; do
+          for script in db/probar.sh ops/respaldar.sh ops/restaurar.sh ops/tests/probar_respaldos.sh ops/crear_rol_app.sh ops/tests/probar_rol_app.sh; do
             bash -n "$script"
           done
 
@@ -82,6 +82,28 @@ jobs:
           fi
           cat "$RUNNER_TEMP/respaldos.txt"
           docker rm -f slotspot-db > /dev/null
+
+      - name: Probar el rol de la aplicacion con Docker
+        run: |
+          docker run -d --name slotspot-db             -e POSTGRES_DB=slotspot -e POSTGRES_USER=slotspot -e POSTGRES_PASSWORD=prueba             postgres:16-alpine
+          timeout 90 bash -c 'until [ "$(docker logs slotspot-db 2>&1 | grep -c "init process complete")" -ge 1 ]; do sleep 1; done'
+          timeout 60 bash -c 'until docker exec slotspot-db pg_isready -U slotspot -d slotspot; do sleep 1; done'
+          bash ops/tests/probar_rol_app.sh
+          docker rm -f slotspot-db > /dev/null
+
+      - name: Probar la imagen de la API con las restricciones del compose
+        run: |
+          docker build -t slotspot-api-ci .
+          docker network create slotspot-ci
+          docker run -d --name slotspot-db --network slotspot-ci             -e POSTGRES_DB=slotspot -e POSTGRES_USER=slotspot -e POSTGRES_PASSWORD=prueba             postgres:16-alpine
+          timeout 90 bash -c 'until [ "$(docker logs slotspot-db 2>&1 | grep -c "init process complete")" -ge 1 ]; do sleep 1; done'
+          timeout 60 bash -c 'until docker exec slotspot-db pg_isready -U slotspot -d slotspot; do sleep 1; done'
+          docker exec -i slotspot-db psql -v ON_ERROR_STOP=1 -q -U slotspot -d slotspot < db/schema.sql
+          docker exec -i slotspot-db psql -v ON_ERROR_STOP=1 -q -U slotspot -d slotspot < db/seed.sql
+          APP_DB_PASSWORD=0123456789abcdef0123456789abcdef bash ops/crear_rol_app.sh
+          docker run -d --name slotspot-api --network slotspot-ci             --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true             -e DATABASE_URL=postgresql://slotspot_app:0123456789abcdef0123456789abcdef@slotspot-db:5432/slotspot             -e JWT_SECRET=ci-secreto-ci-secreto-ci-secreto-ci-secreto-ci-secreto-1234             -e ALLOWED_ORIGINS=http://127.0.0.1:8439             slotspot-api-ci
+          timeout 60 bash -c 'until docker exec slotspot-api python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:8000/salud/bd\")"; do sleep 1; done'             || { docker logs slotspot-api; exit 1; }
+          docker rm -f slotspot-api slotspot-db > /dev/null
 
       - name: Validar el Caddyfile con Caddy
         run: |

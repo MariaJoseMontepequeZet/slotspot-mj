@@ -1,8 +1,9 @@
 from collections.abc import Iterator
-from contextlib import suppress
+from contextlib import contextmanager, suppress
+from typing import Annotated
 
 import psycopg
-from fastapi import Request
+from fastapi import Depends, Request
 from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
@@ -22,8 +23,8 @@ def crear_pool(database_url: str) -> ConnectionPool:
     )
 
 
-def get_conexion(request: Request) -> Iterator[Connection]:
-    pool: ConnectionPool = request.app.state.pool
+@contextmanager
+def tomar_conexion(pool: ConnectionPool) -> Iterator[Connection]:
     try:
         conexion = pool.getconn(timeout=ESPERA_CONEXION_SEGUNDOS)
     except PoolTimeout as error:
@@ -34,3 +35,12 @@ def get_conexion(request: Request) -> Iterator[Connection]:
         with suppress(psycopg.Error):
             conexion.rollback()
         pool.putconn(conexion)
+
+
+def get_pool(request: Request) -> ConnectionPool:
+    return request.app.state.pool
+
+
+def get_conexion(pool: Annotated[ConnectionPool, Depends(get_pool)]) -> Iterator[Connection]:
+    with tomar_conexion(pool) as conexion:
+        yield conexion
