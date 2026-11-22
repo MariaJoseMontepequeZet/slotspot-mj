@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -19,6 +21,8 @@ from app.seguridad import hashear_password
 ADMIN_URL = os.environ.get("TEST_DATABASE_ADMIN_URL")
 RAIZ = Path(__file__).resolve().parent.parent
 SECRETO = "secreto-de-pruebas-" + "a" * 48
+ROL_APP = "slotspot_app_pruebas"
+CLAVE_APP = "clave-del-rol-de-pruebas"
 
 
 @dataclass
@@ -26,6 +30,7 @@ class Entorno:
     app: FastAPI
     cliente: TestClient
     url: str
+    url_app: str
 
     def crear_usuario(
         self,
@@ -75,6 +80,30 @@ def _borrar_base(nombre: str) -> None:
         conexion.execute(f'DROP DATABASE IF EXISTS "{nombre}" WITH (FORCE)')
 
 
+def _aplicar_rol_de_la_app(url: str) -> None:
+    psql = shutil.which("psql")
+    if not psql:
+        pytest.fail("Las pruebas con PostgreSQL necesitan psql para crear el rol de la aplicacion")
+    subprocess.run(
+        [
+            psql,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-q",
+            "-d",
+            url,
+            "-v",
+            f"rol={ROL_APP}",
+            "-v",
+            f"clave={CLAVE_APP}",
+            "-f",
+            str(RAIZ / "db" / "roles.sql"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 @pytest.fixture(scope="session")
 def plantilla_bd() -> Iterator[str]:
     if not ADMIN_URL:
@@ -84,6 +113,7 @@ def plantilla_bd() -> Iterator[str]:
     with psycopg.connect(url, autocommit=True) as conexion:
         conexion.execute((RAIZ / "db" / "schema.sql").read_text(encoding="utf-8"))
         conexion.execute((RAIZ / "db" / "seed.sql").read_text(encoding="utf-8"))
+    _aplicar_rol_de_la_app(url)
     yield nombre
     _borrar_base(nombre)
 
@@ -92,13 +122,14 @@ def plantilla_bd() -> Iterator[str]:
 def entorno(plantilla_bd: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Entorno]:
     nombre = f"slotspot_prueba_{uuid.uuid4().hex[:10]}"
     url = _crear_base(nombre, plantilla_bd)
-    monkeypatch.setenv("DATABASE_URL", url)
+    url_app = make_conninfo(url, user=ROL_APP, password=CLAVE_APP)
+    monkeypatch.setenv("DATABASE_URL", url_app)
     monkeypatch.setenv("JWT_SECRET", SECRETO)
     monkeypatch.delenv("JWT_EXPIRA_MINUTOS", raising=False)
     monkeypatch.delenv("API_DOCS", raising=False)
     get_settings.cache_clear()
     app = create_app()
     with TestClient(app, raise_server_exceptions=False) as cliente:
-        yield Entorno(app=app, cliente=cliente, url=url)
+        yield Entorno(app=app, cliente=cliente, url=url, url_app=url_app)
     get_settings.cache_clear()
     _borrar_base(nombre)

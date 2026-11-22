@@ -63,6 +63,12 @@ class TestPoliticaDeSeguridad:
         assert "Permissions-Policy" in caddyfile
         assert "-Server" in caddyfile
 
+    def test_pide_https_por_un_ano_sin_alcanzar_otros_subdominios(self, caddyfile):
+        linea = next(f for f in caddyfile.splitlines() if "Strict-Transport-Security" in f)
+        assert "max-age=31536000" in linea
+        assert "includeSubDomains" not in linea
+        assert "preload" not in linea
+
 
 class TestRutas:
     def test_la_api_se_publica_sin_el_prefijo_api(self, caddyfile):
@@ -77,11 +83,46 @@ class TestRutas:
 
 
 class TestCompose:
-    def test_el_puerto_web_es_alcanzable_por_el_conector_de_cloudflare(self):
+    def test_el_puerto_web_solo_escucha_en_el_propio_servidor(self):
         compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")
-        assert '- "8439:80"' in compose
-        assert "127.0.0.1:8439" not in compose
+        assert '- "127.0.0.1:8439:80"' in compose
+        assert '- "8439:80"' not in compose
+
+    def test_el_tunel_propio_llega_a_web_por_la_red_de_docker(self):
+        compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")
+        bloque = servicio(compose, "tunel")
+        assert "TUNNEL_TOKEN: ${TUNEL_TOKEN}" in bloque
+        assert "ports:" not in bloque
 
     def test_el_caddyfile_se_monta_desde_la_carpeta_del_proyecto(self):
         compose = (OPS / "docker-compose.yml").read_text(encoding="utf-8")
         assert "./Caddyfile:/etc/caddy/Caddyfile:ro" in compose
+
+
+def servicio(compose: str, nombre: str) -> str:
+    inicio = re.search(rf"^  {nombre}:$", compose, re.MULTILINE).end()
+    resto = compose[inicio:]
+    fin = re.search(r"^  \S|^\S", resto, re.MULTILINE)
+    return resto[: fin.start()] if fin else resto
+
+
+class TestEndurecimientoDelCompose:
+    @pytest.fixture(scope="module")
+    def compose(self) -> str:
+        return (OPS / "docker-compose.yml").read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("nombre", ["db", "api", "web"])
+    def test_ningun_contenedor_gana_privilegios(self, compose, nombre):
+        assert "no-new-privileges:true" in servicio(compose, nombre)
+
+    @pytest.mark.parametrize("nombre", ["api", "web"])
+    def test_api_y_web_no_conservan_capacidades_ni_escriben_en_disco(self, compose, nombre):
+        bloque = servicio(compose, nombre)
+        assert "cap_drop:\n      - ALL" in bloque
+        assert "read_only: true" in bloque
+
+    def test_la_api_no_se_conecta_como_superusuario(self, compose):
+        bloque = servicio(compose, "api")
+        assert "postgresql://slotspot_app:${APP_DB_PASSWORD}@db" in bloque
+        assert "POSTGRES_USER" not in bloque
+        assert "POSTGRES_PASSWORD" not in bloque

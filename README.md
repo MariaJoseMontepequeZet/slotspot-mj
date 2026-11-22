@@ -148,7 +148,8 @@ La API queda en `http://127.0.0.1:8000`. Con `API_DOCS=1` la documentacion inter
 | `pytest` | Ejecuta las pruebas. Las que usan PostgreSQL se omiten si no se define `TEST_DATABASE_ADMIN_URL` |
 | `ruff check .` | Revisa el codigo |
 | `ruff format --check .` | Verifica el formato |
-| `bash db/probar.sh` | Prueba el esquema de la base de datos (requiere `psql` y un servidor PostgreSQL) |
+| `bash db/probar.sh` | Prueba el esquema y los permisos del rol de la API (requiere `psql` y un servidor PostgreSQL) |
+| `bash ops/tests/probar_rol_app.sh` | Prueba `ops/crear_rol_app.sh` contra un contenedor PostgreSQL real (`DB_CONTENEDOR`) |
 | `bash ops/tests/probar_respaldos.sh` | Prueba el respaldo y la restauracion con un `docker` simulado (requiere `psql`, `pg_dump` y `gzip`) |
 | `PROBAR_DOCKER_REAL=1 bash ops/tests/probar_respaldos.sh` | La misma prueba contra un contenedor `slotspot-db` real |
 
@@ -274,9 +275,39 @@ La salida debe contener `frame-ancestors 'self' https://portafoliomariajosemonte
 
 El portafolio, a su vez, debe permitir cargar la direccion en su propia politica (`frame-src https://slotspotmj.pamcing.me`), y el `iframe` debe apuntar a `https://slotspotmj.pamcing.me/?demo=1`, que entra solo a la demo (ver el repositorio del frontend).
 
-### Puerto del servicio web
+### Puerto del servicio web y tunel propio
 
-En el compose, `web` publica `8439:80` en todas las interfaces y no solo en `127.0.0.1`. Es a proposito: el conector de Cloudflare que atiende `slotspotmj.pamcing.me` corre dentro de otro contenedor y entra por la direccion del servidor, asi que un puerto limitado a `127.0.0.1` le daria error 502. Cerrarlo de nuevo exige antes darle a SlotSpot su propio conector dentro de este compose y apuntar el tunel a `http://web:80`.
+`web` publica el puerto solo en `127.0.0.1:8439`, asi que no es alcanzable desde la red. El trafico de internet entra por el servicio `tunel` de este compose (`cloudflared` con la version fijada), que llega a `web` por la red interna de Docker. SlotSpot no depende del conector de ningun otro proyecto.
+
+Para activarlo hay que crear un tunel propio en Cloudflare Zero Trust (Networks > Tunnels > Create a tunnel > Cloudflared > Docker), copiar su token a `TUNEL_TOKEN` en el `.env` del servidor y apuntar el hostname `slotspotmj.pamcing.me` a `http://web:80`. El token nunca se sube al repositorio.
+
+### Rol de base de datos de la API
+
+La API ya no entra a PostgreSQL como superusuario sino con el rol `slotspot_app`, definido en `db/roles.sql`: puede leer y escribir las tablas del negocio, solo insertar y leer en `auditoria`, y no puede borrar ni modificar pagos, borrar nada, alterar el esquema, crear objetos ni leer archivos del servidor. Asi, aunque alguien lograra inyectar SQL, no podria vaciar tablas ni reescribir la bitacora. `db/tests/permisos.sql` lo comprueba (corre dentro de `bash db/probar.sh`) y toda la suite de la API se ejecuta con ese rol.
+
+Para crearlo o cambiar su contrasena en el servidor (se puede repetir sin riesgo):
+
+```bash
+export APP_DB_PASSWORD="$(openssl rand -hex 24)"
+bash ops/crear_rol_app.sh
+echo "APP_DB_PASSWORD=$APP_DB_PASSWORD" >> ~/slotspot/.env
+```
+
+La contrasena viaja por el entorno del contenedor y no por la linea de comandos. Despues hay que copiar el compose nuevo y ejecutar `docker compose up -d api`. Cuando el cambio de esquema necesite permisos de dueno (migraciones), se ejecutan con el usuario `POSTGRES_USER`, nunca con la API.
+
+### Inicios de sesion limitados
+
+`POST /auth/login` esta protegido contra fuerza bruta y contra saturacion:
+
+- Maximo 20 intentos por direccion IP cada 5 minutos y 8 fallos por correo cada 15 minutos (un inicio correcto reinicia la cuenta del correo). Al excederlos responde `429` con `Retry-After`.
+- Maximo 8 inicios de sesion calculando el hash a la vez; el resto recibe `503` al instante. Sin este tope, una rafaga agotaba el pool de 5 conexiones y toda la API dejaba de responder.
+- La conexion a la base se suelta antes de calcular Argon2id, asi que un login lento ya no bloquea al resto de la API.
+
+Los contadores viven en memoria de un solo proceso (la API corre con un worker). Para que la IP sea la del visitante y no la del proxy, define `IP_CLIENTE_CABECERA` (por ejemplo `CF-Connecting-IP` detras de Cloudflare); sin ella se usa la direccion del socket y las cabeceras no se toman en cuenta.
+
+### Endurecimiento de los contenedores
+
+En el compose, `api` y `web` corren con sistema de archivos de solo lectura (con `tmpfs` donde hace falta), sin capacidades de Linux (`web` conserva solo `NET_BIND_SERVICE`) y con `no-new-privileges`; `db` lleva `no-new-privileges`. El CI levanta la imagen de la API con esas mismas restricciones y consulta `/salud/bd`. Caddy envia `Strict-Transport-Security` por un ano (sin `includeSubDomains`, para no afectar otros subdominios).
 
 ### Limites de recursos y logs
 
@@ -297,6 +328,9 @@ Los nombres estan en `.env.example`. Los valores reales viven en el archivo `.en
 | Variable | Uso |
 |----------|-----|
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Credenciales de la base de datos |
+| `TUNEL_TOKEN` | Token del tunel de Cloudflare propio de SlotSpot |
+| `APP_DB_PASSWORD` | Contrasena del rol `slotspot_app` con el que se conecta la API |
+| `IP_CLIENTE_CABECERA` | Opcional. Cabecera con la IP real del visitante (`CF-Connecting-IP`); vacia por defecto |
 | `JWT_SECRET` | Firma de los tokens de sesion (minimo 32 caracteres) |
 | `ALLOWED_ORIGINS` | Origenes permitidos por CORS, separados por comas |
 | `JWT_EXPIRA_MINUTOS` | Opcional. Duracion de la sesion, de 1 a 1440 (por defecto 60) |
