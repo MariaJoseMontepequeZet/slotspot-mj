@@ -65,7 +65,9 @@ services:
     cpus: 0.5
     logging: *logging
     ports:
-      - "127.0.0.1:8439:80"
+      # Abierto en todas las interfaces mientras el conector de Cloudflare sea el de otro proyecto.
+      # Con el tunel propio (perfil tunel) se cambia a "127.0.0.1:8439:80".
+      - "8439:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./slotspot-mj-frontend/public:/srv:ro
@@ -86,6 +88,7 @@ services:
       retries: 6
 
   tunel:
+    profiles: ["tunel"]
     image: cloudflare/cloudflared:2025.11.1
     container_name: slotspot-tunel
     restart: unless-stopped
@@ -94,7 +97,7 @@ services:
     logging: *logging
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${TUNEL_TOKEN}
+      TUNNEL_TOKEN: ${TUNEL_TOKEN:-}
     read_only: true
     cap_drop:
       - ALL

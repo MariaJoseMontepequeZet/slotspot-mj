@@ -277,9 +277,14 @@ El portafolio, a su vez, debe permitir cargar la direccion en su propia politica
 
 ### Puerto del servicio web y tunel propio
 
-`web` publica el puerto solo en `127.0.0.1:8439`, asi que no es alcanzable desde la red. El trafico de internet entra por el servicio `tunel` de este compose (`cloudflared` con la version fijada), que llega a `web` por la red interna de Docker. SlotSpot no depende del conector de ningun otro proyecto.
+Por ahora `web` publica `8439:80` en todas las interfaces: el dominio `slotspotmj.pamcing.me` entra por el conector de Cloudflare de otro proyecto del servidor, que llega por la direccion del servidor, y un puerto limitado a `127.0.0.1` le daria error 502. Es una decision tomada hasta que la aplicacion se comercialice. Mientras tanto el puerto es alcanzable por HTTP desde la red local.
 
-Para activarlo hay que crear un tunel propio en Cloudflare Zero Trust (Networks > Tunnels > Create a tunnel > Cloudflared > Docker), copiar su token a `TUNEL_TOKEN` en el `.env` del servidor y apuntar el hostname `slotspotmj.pamcing.me` a `http://web:80`. El token nunca se sube al repositorio.
+El compose ya incluye el servicio `tunel` (cloudflared con la version fijada) bajo el perfil `tunel`, que no arranca por defecto. Cuando SlotSpot tenga su propio tunel:
+
+1. Crear el tunel en Cloudflare Zero Trust (Networks > Tunnels > Create a tunnel > Cloudflared > Docker) y copiar su token a `TUNEL_TOKEN` en el `.env` del servidor. El token nunca se sube al repositorio.
+2. Mover el hostname `slotspotmj.pamcing.me` al tunel nuevo con el servicio `http://web:80`.
+3. Cambiar el puerto del compose a `"127.0.0.1:8439:80"` (y la prueba de `tests/test_caddyfile.py`).
+4. Levantar con `docker compose --profile tunel up -d`.
 
 ### Rol de base de datos de la API
 
