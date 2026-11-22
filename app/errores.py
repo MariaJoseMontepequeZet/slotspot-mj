@@ -15,10 +15,16 @@ class ErrorApp(Exception):
     codigo = "error_interno"
     mensaje = "Ocurrió un error inesperado."
 
-    def __init__(self, mensaje: str | None = None, detalle: Any = None) -> None:
+    def __init__(
+        self,
+        mensaje: str | None = None,
+        detalle: Any = None,
+        reintentar_en: int | None = None,
+    ) -> None:
         super().__init__(mensaje or self.mensaje)
         self.mensaje = mensaje or self.mensaje
         self.detalle = detalle
+        self.reintentar_en = reintentar_en
 
 
 class NoAutenticado(ErrorApp):
@@ -58,6 +64,18 @@ class Conflicto(ErrorApp):
     status_code = 409
     codigo = "conflicto"
     mensaje = "La operación entra en conflicto con datos existentes."
+
+
+class LimiteExcedido(ErrorApp):
+    status_code = 429
+    codigo = "demasiados_intentos"
+    mensaje = "Demasiados intentos. Espera unos minutos antes de volver a intentarlo."
+
+
+class ServidorOcupado(ErrorApp):
+    status_code = 503
+    codigo = "servidor_ocupado"
+    mensaje = "Hay muchos inicios de sesión en curso. Intenta de nuevo en unos segundos."
 
 
 class BaseDatosNoDisponible(ErrorApp):
@@ -100,8 +118,14 @@ def traducir_validacion(error: dict[str, Any]) -> str:
 
 
 async def manejar_error_app(request: Request, error: ErrorApp) -> JSONResponse:
-    cabeceras = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
-    return respuesta_error(error.status_code, error.codigo, error.mensaje, error.detalle, cabeceras)
+    cabeceras: dict[str, str] = {}
+    if error.status_code == 401:
+        cabeceras["WWW-Authenticate"] = "Bearer"
+    if error.reintentar_en:
+        cabeceras["Retry-After"] = str(error.reintentar_en)
+    return respuesta_error(
+        error.status_code, error.codigo, error.mensaje, error.detalle, cabeceras or None
+    )
 
 
 async def manejar_validacion(request: Request, error: RequestValidationError) -> JSONResponse:

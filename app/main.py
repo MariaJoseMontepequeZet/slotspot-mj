@@ -8,6 +8,7 @@ from app.config import docs_habilitadas, get_settings, origenes_permitidos
 from app.db import crear_pool
 from app.dependencias import ConexionBD
 from app.errores import registrar_manejadores
+from app.limitador import LimitadorLogin
 from app.routers import auth, usuarios
 
 
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     registrar_manejadores(app)
+    app.state.limitador = LimitadorLogin()
 
     @app.get("/salud")
     def salud() -> dict[str, str]:

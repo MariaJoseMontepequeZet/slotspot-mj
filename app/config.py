@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(min_length=32)
     jwt_expira_minutos: int = Field(default=60, ge=1, le=1440)
     jwt_emisor: str = "slotspot-mj"
+    ip_cliente_cabecera: str = ""
 
 
 @lru_cache
